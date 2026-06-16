@@ -1,0 +1,236 @@
+[
+    {
+        "id": "cat1",
+        "title": "TTS voice quality",
+        "description": "Rate the quality of the generated agent's voice.",
+        "questions": [
+            {
+                "id": "effort",
+                "text": "Please rate the degree of effort you had to make to understand the message.",
+                "min": "1 = Impossible even with much effort",
+                "max": "7 = No effort required"
+            },
+            {
+                "id": "singleWords",
+                "text": "Were single words hard to understand?",
+                "min": "1 = All words hard to understand",
+                "max": "7 = All words easy to understand"
+            },
+            {
+                "id": "clearlyDistinguishable",
+                "text": "Were the speech sounds clearly distinguishable?",
+                "min": "1 = Not at all clear",
+                "max": "7 = Very clear"
+            },
+            {
+                "id": "preciseArticulation",
+                "text": "Was the articulation of speech sounds precise?",
+                "min": "1 = Slurried or imprecise",
+                "max": "7 = Precise"
+            },
+            {
+                "id": "pleasantVoice",
+                "text": "Was the voice you heard pleasant to listen to?",
+                "min": "1 = Very unpleasant",
+                "max": "7 = Very pleasant"
+            },
+            {
+                "id": "naturalVoice",
+                "text": "Did the voice sound natural?",
+                "min": "1 = Very unnatural",
+                "max": "7 = Very natural"
+            },
+            {
+                "id": "humanLike",
+                "text": "To what extent did the voice sound like a human?",
+                "min": "1 = Nothing like a human",
+                "max": "7 = Just like a human"
+            },
+            {
+                "id": "harshVoice",
+                "text": "Did the voice sound harsh, raspy, or strained?",
+                "min": "1 = Significantly harsh/raspy",
+                "max": "7 = Normal quality"
+            },
+            {
+                "id": "emphasis",
+                "text": "Did emphasis of important words occur?",
+                "min": "1 = Incorrect emphasis",
+                "max": "7 = Excellent use of emphasis"
+            },
+            {
+                "id": "naturalRhythm",
+                "text": "Did the rhythm of the speech sound natural?",
+                "min": "1 = Unnatural or mechanical",
+                "max": "7 = Natural rhythm"
+            },
+            {
+                "id": "smoothIntonation",
+                "text": "Did the intonation pattern of sentences sound smooth and natural?",
+                "min": "1 = Abrupt or abnormal",
+                "max": "7 = Smooth or normal"
+            },
+            {
+                "id": "trustworthy",
+                "text": "Did the voice appear to be trustworthy?",
+                "min": "1 = Not at all trustworthy",
+                "max": "7 = Very trustworthy"
+            },
+            {
+                "id": "confident",
+                "text": "Did the voice suggest a confident speaker?",
+                "min": "1 = Not at all confident",
+                "max": "7 = Very confident"
+            },
+            {
+                "id": "enthusiastic",
+                "text": "Did the voice seem to be enthusiastic?",
+                "min": "1 = Not at all enthusiastic",
+                "max": "7 = Very enthusiastic"
+            },
+            {
+                "id": "persuasive",
+                "text": "Was the voice persuasive?",
+                "min": "1 = Not at all persuasive",
+                "max": "7 = Very persuasive"
+            }
+        ]
+    },
+    {
+        "id": "cat2",
+        "title": "Agent interaction quality",
+        "description": "Rate the quality of the interaction with the voice agent, focusing on timing, turn-taking, delays, pauses, interruptions, and conversational flow.",
+        "questions": [
+            {
+                "id": "delayAcceptable",
+                "text": "The delay between my speech and the agent's reply felt acceptable.",
+                "min": "1 = Strongly disagree",
+                "max": "7 = Strongly agree"
+            },
+            {
+                "id": "freeFlowing",
+                "text": "How free-flowing did the conversation feel?",
+                "min": "1 = Not at all free-flowing",
+                "max": "7 = Completely free-flowing"
+            },
+            {
+                "id": "naturalConv",
+                "text": "How natural did the conversation feel?",
+                "min": "1 = Not at all natural",
+                "max": "7 = Completely natural"
+            },
+            {
+                "id": "awkwardPauses",
+                "text": "How often during the conversation did you experience awkward pauses, interruptions, or talking over the agent?",
+                "min": "1 = Very frequently",
+                "max": "7 = Never"
+            }
+        ]
+    },
+    {
+        "id": "cat3",
+        "title": "Passive listening difficulty",
+        "description": "Rate how difficult it was to UNDERSTAND the agent's voice in a noisy caf\u00e9-like acoustic scene.",
+        "questions": [
+            {
+                "id": "understandAmount",
+                "text": "How much of the agent's speech could you understand in this conversation?",
+                "min": "1 = Not at all",
+                "max": "7 = Everything"
+            },
+            {
+                "id": "understandEffort",
+                "text": "How much effort did it take you to understand the agent's speech?",
+                "min": "1 = No effort at all",
+                "max": "7 = Extreme effort"
+            }
+        ]
+    },
+    {
+        "id": "cat4",
+        "title": "Communication difficulty",
+        "description": "Rate how difficult it was to communicate (INTERACT) with the agent in the noisy caf\u00e9-like acoustic scene.",
+        "questions": [
+            {
+                "id": "stressful",
+                "text": "How stressful was it to have this conversation?",
+                "min": "1 = Not stressful at all",
+                "max": "7 = Extremely stressful"
+            },
+            {
+                "id": "noiseDifficulty",
+                "text": "The noise made it hard to have a smooth back-and-forth exchange with the agent.",
+                "min": "1 = Strongly disagree",
+                "max": "7 = Strongly agree"
+            },
+            {
+                "id": "commSuccess",
+                "text": "How successful was the communication overall?",
+                "min": "1 = Completely unsuccessful",
+                "max": "7 = Completely successful"
+            },
+            {
+                "id": "askRepeat",
+                "text": "How often did you have to ask the agent to repeat or rephrase something?",
+                "min": "1 = Never",
+                "max": "7 = Very frequently"
+            }
+        ]
+    },
+    {
+        "id": "cat5",
+        "title": "Task ecological validity",
+        "description": "Rate how realistic and meaningful the role-play task felt as a situation you might encounter in everyday life. Focus on the task and your engagement with it, not on the voice quality or background noise.",
+        "questions": [
+            {
+                "id": "relevance",
+                "text": "How relevant was this listening situation to your everyday life?",
+                "min": "1 = Not at all relevant",
+                "max": "7 = Extremely relevant"
+            },
+            {
+                "id": "imagineDoing",
+                "text": "The task I was asked to complete is something I could imagine doing in a real caf\u00e9.",
+                "min": "1 = Strongly disagree",
+                "max": "7 = Strongly agree"
+            },
+            {
+                "id": "engaged",
+                "text": "How engaged did you feel in the role-play task?",
+                "min": "1 = Not at all engaged",
+                "max": "7 = Extremely engaged"
+            }
+        ]
+    },
+    {
+        "id": "cat6",
+        "title": "Acoustic scene ecological validity",
+        "description": "Rate how realistic and immersive the caf\u00e9-like acoustic environment sounded. Focus on the background noise, the sense of being in a real caf\u00e9, and whether the target voice fit naturally into that environment.",
+        "questions": [
+            {
+                "id": "realCafe",
+                "text": "The acoustic environment sounded like a real caf\u00e9 I might find myself in.",
+                "min": "1 = Strongly disagree",
+                "max": "7 = Strongly agree"
+            },
+            {
+                "id": "immersive",
+                "text": "How immersive did the acoustic environment feel?",
+                "min": "1 = Not at all immersive",
+                "max": "7 = Extremely immersive"
+            },
+            {
+                "id": "realisticNoise",
+                "text": "How realistic was the background noise for a caf\u00e9 environment?",
+                "min": "1 = Not at all realistic",
+                "max": "7 = Completely realistic"
+            },
+            {
+                "id": "realisticVoice",
+                "text": "How realistic was the target voice sound for a caf\u00e9 environment?",
+                "min": "1 = Not at all realistic",
+                "max": "7 = Completely realistic"
+            }
+        ]
+    }
+]
