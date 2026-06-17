@@ -6,6 +6,62 @@ from google.genai import types
 # Automatically looks for the GEMINI_API_KEY environment variable
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
+# Configure Gemini to achieve the most deterministic, reproducible, and reliable output possible
+
+# -> Use system instructions instead of the prompt to define transcription rules
+SYSTEM_INSTRUCTION = """
+You are a verbatim audio transcription engine for two-speaker dialogue.
+Your sole task is to transcribe dialogue into text verbatim. 
+NEVER guess or hallucinate content. NEVER paraphrase, 
+correct grammar, smooth over speech disfluencies, or add any commentary.
+Output the transcript ONLY, one line per speaker turn, each turn on a single line, in this exact format:
+
+Follow these strict formatting rules for the transcript:
+
+<formatting_rules>
+1. Format the transcript strictly as a clear dialog using [MM:SS] timestamps and speaker tags (Speaker A, Speaker B).
+2. Every single line must follow this exact pattern: [MM:SS] Speaker X: [Speech text]
+3. Do not include introductory text, concluding remarks, or markdown code blocks (like ```). Output ONLY the raw text transcript.
+</formatting_rules>
+
+Follow these strict rules when you are not certain about the clarity of the audio:
+
+<handling_uncertainty>
+1. If a word or phrase is entirely unintelligible, replace it exactly with the token: [unclear]
+2. Do not attempt to guess, hallucinate, or fill in unclear parts based on context. 
+3. If an entire line or timestamp is fuzzy, still output the timestamp and tag, using [unclear] for the text.
+</handling_uncertainty>
+
+<example_format>
+[00:05] Speaker A: What can I get started for you today?
+[00:08] Speaker B: Um, hello. I would like to know the price of a coffee milk.
+[00:12] Speaker A: Sure thing.
+</example_format>
+"""
+
+# -> Minimal instructions in the user prompt
+USER_PROMPT = "Transcribe dialogue in the audio file verbatim, striclty following the system instructions."
+
+# -> Prepare a config object for deterministic generation
+CONFIG = types.GenerateContentConfig(
+    system_instruction=SYSTEM_INSTRUCTION,        # all transcription rules, applied to every request
+    temperature=0.0,                              # greedy decoding: always pick the most probable token
+    top_k=1,                                      # only ever consider the single top token (explicit greedy)
+    top_p=1.0,                                    # no nucleus filtering (inert at temp 0, set for clarity)
+    seed=42,                                      # fixed seed; only has effect if temperature > 0
+    candidate_count=1,                            # generate one response, not several
+    max_output_tokens=32768,                      # generous headroom
+    response_mime_type=None,                      # here its better not to constrain the output 
+    response_schema=None,      # constrain output to a list of TranscriptSegment objects
+    audio_timestamp=True,                         # enable real timestamp understanding for audio-only input
+    thinking_config=types.ThinkingConfig(
+        thinking_budget=0,                        # disable variable-length reasoning for stable output
+    ),
+)
+
+# -> Choose a model with specific weights (the last three digits)
+MODEL_NAME = "gemini-2.5-pro-002"  # Note: Pro is highly recommended over Flash for strict adherence to formatting rules
+
 # Define the data directory
 data_dir = Path("data")
 
@@ -41,50 +97,11 @@ for folder in data_dir.iterdir():
         
         print(f"  Processing audio and formatting transcript...")
 
-        # 1. Define strict system instructions to anchor the model's behavior
-        system_instruction = (
-            "You are a precise, literal, and objective audio transcription assistant. "
-            "Your sole task is to transcribe audio into text verbatim. Do not paraphrase, "
-            "correct grammar, smooth over speech disfluencies, or add any commentary."
-        )
-
-        # 2. Enforce deterministic generation configuration
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.0,       # Forces greedy decoding for maximum determinism
-            seed=42,               # Anchors the random number generator
-            candidate_count=1,     # Only generate the single best match
-        )
-
-        # 3. Construct the structured user prompt
-        user_prompt = """
-        You are transcribing a research interview audio file. Follow these rules with absolute precision:
-
-        <formatting_rules>
-        1. Format the transcript strictly as a clear dialog using [MM:SS] timestamps and speaker tags (Speaker A, Speaker B).
-        2. Every single line must follow this exact pattern: [MM:SS] Speaker X: [Speech text]
-        3. Do not include introductory text, concluding remarks, or markdown code blocks (like ```). Output ONLY the raw text transcript.
-        </formatting_rules>
-
-        <handling_uncertainty>
-        1. If a word or phrase is entirely unintelligible, replace it exactly with the token: [unclear]
-        2. Do not attempt to guess, hallucinate, or fill in unclear parts based on context. 
-        3. If an entire line or timestamp is fuzzy, still output the timestamp and tag, using [unclear] for the text.
-        </handling_uncertainty>
-
-        <example_format>
-        Speaker A: Hello, how are you?
-        Speaker B: I'm good, thanks! And you?
-        Speaker A: I wanted to ask about the [unclear] data you collected.
-        </example_format>
-
-        Transcribe the attached audio according to these rules.
-        """
 
         response = client.models.generate_content(
-            model="gemini-2.5-pro",  # Note: Pro is highly recommended over Flash for strict adherence to formatting rules
-            contents=[user_prompt, audio_file],
-            config=config
+            model=MODEL_NAME,
+            contents=[USER_PROMPT, audio_file],
+            config=CONFIG
         )
         
         # Output the result
