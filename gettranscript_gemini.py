@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from my_gemini_API_calls import transcribe_audio
+from my_gemini_API_calls import transcribe_gemini   
 
 data_dir = Path("data")
 target_files = ["transcript_training.wav", "transcript_experiment.wav"]
@@ -28,7 +28,7 @@ for folder in data_dir.iterdir():
             continue
 
         print(f"\n  Uploading {target_file} to Google's Files API...")
-        segments = transcribe_audio(audio_path)
+        segments = transcribe_gemini(audio_path)
 
         print(f"\n  --- Transcript for {target_file} ({len(segments)} turns) ---")
         for seg in segments:

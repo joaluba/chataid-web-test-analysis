@@ -69,7 +69,7 @@ TRANSCRIPTION_SCHEMA = {
 }
 
 
-def transcribe_audio(audio_path: str | Path, temperature: float = 0.0) -> list[dict]:
+def transcribe_gemini(audio_path: str | Path, temperature: float = 0.0) -> list[dict]:
     """Upload an audio file to Gemini and return the verbatim transcript as a list of segments."""
     config = types.GenerateContentConfig(
         system_instruction=TRANSCRIPTION_SYSTEM_INSTRUCTION,

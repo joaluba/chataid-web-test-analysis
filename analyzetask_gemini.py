@@ -1,18 +1,17 @@
 import os
 import json
-import time
 from pathlib import Path
 from typing import List, Dict
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
-import os
+from google.genai.types import ThinkingConfig
 
 
 api_key = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=api_key)
 
-MODEL = "gemini-2.5-pro"  # Recommended over flash models for strict scoring accuracy and logical counting
+MODEL = "gemini-2.5-pro-001"
 DATA_DIR = Path("data")
 
 # Reference answers (constant across participants)
@@ -36,6 +35,8 @@ EXPERIMENT_ANSWERS = """
 - Cafe closing time: 2am
 """
 
+VALID_SCORES = {0.0, 0.5, 1.0}
+
 
 # =====================================================================
 # 1. Pydantic Schemas for Structured JSON Generation
@@ -57,47 +58,51 @@ class ScoreMapping(BaseModel):
 
 
 # =====================================================================
-# 2. Enhanced Core Functionality
+# 2. Helpers
+# =====================================================================
+
+def clamp_score(v: float) -> float:
+    return min(VALID_SCORES, key=lambda s: abs(s - v))
+
+
+# =====================================================================
+# 3. Core Functionality
 # =====================================================================
 
 def count_clarifications(transcript_text: str) -> dict:
-    """
-    Determines how many times a participant asked for clarification,
-    utilizing structured outputs for absolute reproducibility.
-    """
     system_instruction = (
         "You are an objective, analytical research assistant trained to identify and isolate "
         "conversational clarification requests in audio transcripts with complete precision. "
-        "Do not guess or apply subjective interpretations; adhere strictly to the definitions provided."
+        "Do not guess or apply subjective interpretations; adhere strictly to the definitions provided.\n\n"
+        "TASK: Count the number of CLARIFICATION REQUESTS made by the participant "
+        "(the tourist/customer, NOT the attendant/waiter).\n\n"
+        "A clarification request is strictly defined as an utterance where the participant asks "
+        "for something to be repeated or re-explained because they did not hear or understand it.\n"
+        "Examples of valid clarification requests:\n"
+        "- 'Sorry, which was the last museum?'\n"
+        "- 'What was the artist's name again?'\n"
+        "- 'Can you repeat that?'\n"
+        "- 'Sorry?'\n"
+        "- 'What?'\n"
+        "- 'Can you speak louder?'\n\n"
+        "Do NOT count general follow-up questions that probe for new, unmentioned information "
+        "(e.g., asking 'Is there vegan milk?' when milk options have not been discussed yet "
+        "is NOT a clarification request).\n"
+        "Only count utterances from the participant (tourist/customer), never from the attendant or waiter."
     )
 
-    prompt = f"""You are analyzing a conversation transcript.
-
-Count the number of CLARIFICATION REQUESTS made by the participant (the tourist/customer, NOT the attendant/waiter).
-
-A clarification request is strictly defined as an utterance where the participant asks for something to be repeated or re-explained because they did not hear or understand it.
-Examples:
-- "Sorry, which was the last museum?"
-- "What was the artist's name again?"
-- "Can you repeat that?"
-- "Sorry?"
-- "What?"
-- "Can you speak louder?"
-
-Do NOT count general follow-up questions that probe for new, unmentioned information (e.g., asking "Is there vegan milk?" when milk options haven't been discussed yet is NOT a clarification request).
-
-TRANSCRIPT TO ANALYZE:
+    prompt = f"""TRANSCRIPT TO ANALYZE:
 ---
 {transcript_text}
 ---
 """
 
-    # Enforce deterministic constraints + JSON Schema targeting the Pydantic model
     config = types.GenerateContentConfig(
         system_instruction=system_instruction,
         temperature=0.0,
         seed=42,
         candidate_count=1,
+        thinking_config=ThinkingConfig(thinking_budget=0),
         response_mime_type="application/json",
         response_schema=ClarificationAnalysis,
     )
@@ -107,33 +112,28 @@ TRANSCRIPT TO ANALYZE:
         contents=[prompt],
         config=config
     )
-    
-    # Parse output reliably (Gemini SDK guarantees this structure matches ClarificationAnalysis)
+
     data = json.loads(response.text)
     return data
 
 
 def score_answers(user_input_dict: dict, reference_answers: str, task_label: str) -> dict:
-    """
-    Scores participant responses objectively using rigorous semantic alignment
-    and returning structured score mapping schemas.
-    """
     system_instruction = (
         "You are an impartial academic grader scoring a user-input questionnaire against "
-        "an official answer key. You score with absolute objectivity, consistency, and precision."
+        "an official answer key. You score with absolute objectivity, consistency, and precision.\n\n"
+        f"TASK: Score a participant's answers in a {task_label} task.\n\n"
+        "For each question key provided in the participant's answers, evaluate accuracy and assign exactly one of these scores:\n"
+        "- 1.0 (Correct): The meaning is fully correct, even if not perfectly worded. "
+        "For numerical responses, ignore differences in currency signs or units if the correct numerical value is present.\n"
+        "- 0.5 (Partially Correct): Minor omissions or slight inaccuracies "
+        "(e.g., missing one of several requested items, single-word errors).\n"
+        "- 0.0 (Incorrect): The answer is incorrect, irrelevant, or missing.\n\n"
+        "Match questions using semantic meaning, not string syntax. "
+        "You MUST evaluate every key inside the participant's answers dictionary and map it strictly inside the output 'scores' object. "
+        "No key may be omitted from the output."
     )
 
-    prompt = f"""You are scoring a participant's answers in a {task_label} task.
-
-Below you will find the correct REFERENCE ANSWERS, followed by the participant's actual answers.
-For each question key provided in the participant's answers, evaluate their accuracy and assign a score:
-- 1.0 (Correct): The meaning is fully correct, even if not perfectly worded. For numerical responses, ignore differences in currency signs/units if the correct numerical value is correct.
-- 0.5 (Partially Correct): Minor omissions or slight inaccuracies (e.g., missing one of several requested items, single-word errors).
-- 0.0 (Incorrect): The answer is incorrect, irrelevant, or missing.
-
-Ensure you match questions using semantic meaning, not string syntax. You must evaluate every key inside the participant's answers dictionary and map it strictly inside the output 'scores' object.
-
-REFERENCE ANSWERS:
+    prompt = f"""REFERENCE ANSWERS:
 ---
 {reference_answers}
 ---
@@ -149,6 +149,7 @@ PARTICIPANT'S ANSWERS:
         temperature=0.0,
         seed=42,
         candidate_count=1,
+        thinking_config=ThinkingConfig(thinking_budget=0),
         response_mime_type="application/json",
         response_schema=ScoreMapping,
     )
@@ -160,12 +161,23 @@ PARTICIPANT'S ANSWERS:
     )
 
     data = json.loads(response.text)
-    # Return just the dictionary of key-value score pairs to align with original script flow
-    return data.get("scores", {})
+    raw_scores = data.get("scores", {})
+
+    # Clamp all scores to {0.0, 0.5, 1.0}
+    clamped = {k: clamp_score(v) for k, v in raw_scores.items()}
+
+    # Validate key coverage
+    input_keys = set(user_input_dict.keys())
+    output_keys = set(clamped.keys())
+    missing = input_keys - output_keys
+    if missing:
+        print(f"  WARNING: scorer did not return scores for keys: {missing}")
+
+    return clamped
 
 
 # =====================================================================
-# 3. Folder Pipeline Execution
+# 4. Folder Pipeline Execution
 # =====================================================================
 
 def process_folder(folder: Path):
@@ -175,13 +187,11 @@ def process_folder(folder: Path):
     exp_tx = (folder / "transcript_experiment_transcript.txt").read_text(encoding="utf-8")
     data = json.loads((folder / "experiment_data.json").read_text(encoding="utf-8"))
 
-    # 1 & 2: clarification counts (strictly parsed out of standard schemas)
     train_clar = count_clarifications(train_tx)
     exp_clar = count_clarifications(exp_tx)
     print(f"  training clarifications:   {train_clar['clarification_requests']}")
     print(f"  experiment clarifications: {exp_clar['clarification_requests']}")
 
-    # 3 & 4: answer scoring
     train_scores = score_answers(
         data.get("training_userinput", {}), TRAINING_ANSWERS, "training (tourist office)")
     exp_scores = score_answers(
@@ -189,8 +199,7 @@ def process_folder(folder: Path):
     print(f"  training score total:   {sum(train_scores.values())} / {len(train_scores)}")
     print(f"  experiment score total: {sum(exp_scores.values())} / {len(exp_scores)}")
 
-    # 5: assemble enriched output
-    enriched = dict(data)  # Keep original data
+    enriched = dict(data)
     enriched["analysis"] = {
         "clarification_requests_training": train_clar["clarification_requests"],
         "clarification_requests_experiment": exp_clar["clarification_requests"],
