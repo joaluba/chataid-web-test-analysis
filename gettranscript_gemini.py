@@ -23,9 +23,9 @@ for folder in data_dir.iterdir():
 
         output_filename = target_file.replace(".wav", ".json")
         output_path = folder / "analysis" / output_filename
-        if output_path.exists():
-            print(f"  ℹ️  Transcript already exists at {output_path}, skipping.")
-            continue
+        # if output_path.exists():
+        #     print(f"  ℹ️  Transcript already exists at {output_path}, skipping.")
+        #     continue
 
         print(f"\n  Uploading {target_file} to Google's Files API...")
         segments = transcribe_gemini(audio_path)

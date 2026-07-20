@@ -14,7 +14,7 @@ from my_asr_API_calls import diarize_audio, transcribe_qwen
 TEMPERATURES = [0, 1.0]
 N_TAKES = 5
 DATA_DIR = Path("data")
-PARTICIPANT_DIR = DATA_DIR / "experiment_Riri_1779974812966"
+PARTICIPANT_DIR = DATA_DIR / "experiment_Gerard_1780157613344"
 TARGET_FILES = ["transcript_experiment.wav"]
 
 

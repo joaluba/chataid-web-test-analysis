@@ -1,6 +1,8 @@
+import copy
 import json
 import re
 import string
+import unicodedata
 from itertools import combinations
 from pathlib import Path
 
@@ -59,6 +61,33 @@ def _strip_bracketed_artifacts(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
+# Filler/backchannel spellings that should compare equal, grouped by canonical form.
+# "um" = hesitation sounds; "hmm" = backchannel/acknowledgment sounds. Kept separate
+# since they likely signal different things when analysing communication difficulty.
+FILLER_GROUPS = {
+    "um":  {"um", "umm", "ummm", "uh", "uhh", "uhm", "ehm", "erm", "er"},
+    "hmm": {"hmm", "hm", "mhm", "mm", "mmm"},
+}
+
+FILLER_CANONICAL = {
+    variant: canonical
+    for canonical, variants in FILLER_GROUPS.items()
+    for variant in variants
+}
+
+
+def _normalize_fillers(text):
+    """Rewrite filler/backchannel word variants (e.g. "uh", "ehm") to one canonical
+    spelling per group (see FILLER_GROUPS), so they compare equal regardless of
+    which spelling a transcript used."""
+    tokens = text.split()
+    out = [
+        FILLER_CANONICAL.get(tok.strip(string.punctuation).lower(), tok)
+        for tok in tokens
+    ]
+    return " ".join(out)
+
+
 def compute_wer(reference, hypothesis, normalize_text=True):
     if normalize_text:
         return jiwer.wer(
@@ -85,7 +114,7 @@ def segments_to_text(segments):
 def find_transcript_files(participant_dir, tag):
     """Find every take file for one transcription method (e.g. "temp0", "temp1",
     "asr") in participant_dir/analysis/, sorted by take number."""
-    return sorted(Path(participant_dir).glob(f"analysis/*_{tag}_take*.json"))
+    return sorted(Path(participant_dir).glob(f"analysis/*_{tag}*.json"))
 
 def load_transcripts(files):
     return [json.loads(Path(f).read_text(encoding="utf-8")) for f in files]
@@ -124,6 +153,7 @@ def analyse_wer_within(files, label, normalize_text=True):
     texts = [segments_to_text(t) for t in transcripts]
     if normalize_text:
         texts = [_strip_bracketed_artifacts(t) for t in texts]
+        texts = [_normalize_fillers(t) for t in texts]
         texts = [_normalize_numbers(t) for t in texts]
 
     pairwise = [
@@ -152,6 +182,8 @@ def analyse_wer_across(files_a, files_b, label, normalize_text=True):
     if normalize_text:
         texts_a = [_strip_bracketed_artifacts(t) for t in texts_a]
         texts_b = [_strip_bracketed_artifacts(t) for t in texts_b]
+        texts_a = [_normalize_fillers(t) for t in texts_a]
+        texts_b = [_normalize_fillers(t) for t in texts_b]
         texts_a = [_normalize_numbers(t) for t in texts_a]
         texts_b = [_normalize_numbers(t) for t in texts_b]
 
@@ -161,3 +193,47 @@ def analyse_wer_across(files_a, files_b, label, normalize_text=True):
         for j, tb in enumerate(texts_b)
     ]
     return _wer_stats(pairwise)
+
+
+# ── CLARIFICATION REQUEST (NCR) DATA ───────────────────────────────────────────
+
+
+def _find_participant_folder(data_dir: Path, export_id: str) -> Path:
+    """Match experiment_data["exportId"] back to its data/experiment_<exportId> folder.
+    Compares Unicode-normalized names, since accented exportIds (e.g. "Álvaro Díaz...")
+    aren't always byte-identical to the folder name on disk."""
+    target = unicodedata.normalize("NFC", export_id)
+    for folder in sorted(Path(data_dir).glob("experiment_*")):
+        candidate = unicodedata.normalize("NFC", folder.name.removeprefix("experiment_"))
+        if candidate == target:
+            return folder
+    raise FileNotFoundError(f"No participant folder found for exportId {export_id!r} in {data_dir}")
+
+
+def add_NCR_data(experiment_data: dict, data_dir: Path = Path("data")) -> dict:
+    """Return a copy of experiment_data with an added "NCR" key holding every available
+    clarification-request rating for this participant, keyed by source:
+      - "gemini_proposals": LLM proposals (see getNCR_gemini.py / gemini_NCR_proposals.json)
+      - "gemini_decided":   LLM final judgment (gemini_NCR_decided.json)
+      - "<alias>":          human rating without LLM proposals (<alias>_NCR.json)
+      - "gemini_and_<alias>": human rating with LLM proposals (gemini_and_<alias>_NCR.json)
+    Each value has the shape {"training": {"cr_lines": [...]}, "experiment": {"cr_lines": [...]}}.
+    Sources with no matching file on disk are simply absent from "NCR"."""
+    folder = _find_participant_folder(data_dir, experiment_data["exportId"])
+    analysis_dir = folder / "analysis"
+
+    ncr = {}
+    for path, source in [
+        (analysis_dir / "gemini_NCR_proposals.json", "gemini_proposals"),
+        (analysis_dir / "gemini_NCR_decided.json", "gemini_decided"),
+    ]:
+        if path.exists():
+            ncr[source] = json.loads(path.read_text(encoding="utf-8"))
+
+    for path in analysis_dir.glob("*_NCR.json"):
+        source = path.stem.removesuffix("_NCR")
+        ncr[source] = json.loads(path.read_text(encoding="utf-8"))
+
+    experiment_data_with_NCR = copy.deepcopy(experiment_data)
+    experiment_data_with_NCR["NCR"] = ncr
+    return experiment_data_with_NCR

@@ -91,3 +91,88 @@ def transcribe_gemini(audio_path: str | Path, temperature: float = 0.0) -> list[
         config=config,
     )
     return json.loads(response.text)
+
+
+# ── CLARIFICATION REQUEST DETECTION ────────────────────────────────────────────
+#
+# Two variants of the same task, at different points in the pipeline:
+#
+# - propose_clarification_requests: permissive, over-inclusive candidate generation.
+#   Meant to be reviewed and filtered by a human afterwards (see humanrate_NCR.py),
+#   so it errs toward flagging borderline cases rather than missing real ones.
+#
+# - judge_clarification_requests: the final, no-human-in-the-loop decision. Used to
+#   compare LLM-only judgments against the human-reviewed proposals for reliability
+#   analysis, so it must apply the same definition precisely instead of over-including.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+CLARIFICATION_DEFINITION = (
+    "A clarification request is an utterance where a speaker:\n"
+    "- Asks to repeat or re-say something ('Can you repeat that?', 'Say that again?')\n"
+    "- Asks for clarification of something already mentioned\n"
+    "- Partially repeats something with a trailing or rising intonation\n"
+    "- Asks for spelling, pronunciation, or confirmation of a word or phrase\n"
+    "- Expresses that they didn't fully hear or understand something already said\n"
+    "- Makes any request to speak louder or more clearly\n"
+    "- Makes a sound indicating that they did not hear properly ('Huh?', 'Sorry?', 'What?')\n\n"
+    "Do NOT include general information-seeking questions about new topics.\n"
+    "Only mark utterances of the user (usually Speaker B) never the agent (Speaker A)."
+)
+
+CLARIFICATION_PROPOSAL_SYSTEM_INSTRUCTION = (
+    "You are a linguistic expert identifying potential clarification requests in conversation "
+    "transcripts, to be reviewed by a human afterwards. Mark ANY utterance from the user (usually "
+    "Speaker B) (the participant/tourist/customer) that could possibly be a clarification request — "
+    "err heavily on the side of inclusion.\n\n" + CLARIFICATION_DEFINITION
+)
+
+CLARIFICATION_FINAL_SYSTEM_INSTRUCTION = (
+    "You are a linguistic expert making the FINAL determination of which utterances in a conversation "
+    "transcript are genuine clarification requests. Your decision will not be reviewed by a human "
+    "afterwards, so apply the definition precisely: mark an utterance ONLY if you are confident it is "
+    "a genuine clarification request, not merely a possible one. Do not over-include borderline "
+    "cases.\n\n" + CLARIFICATION_DEFINITION
+)
+
+CLARIFICATION_USER_PROMPT = (
+    "Identify clarification requests in the transcript below according to the system instruction. "
+    "Each line is prefixed with its index in brackets, e.g. [0], [1], etc. "
+    "Return ONLY a JSON object with a single key \"cr_line_indices\" whose value is an array "
+    "of the integer indices of lines that are clarification requests. "
+    "Example: {\"cr_line_indices\": [2, 7, 12]}\n\n"
+    "TRANSCRIPT:\n"
+)
+
+
+def _cr_line_indices(system_instruction: str, numbered_transcript: str) -> set[int]:
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        temperature=0.0,
+        seed=42,
+        candidate_count=1,
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+        response_mime_type="application/json",
+    )
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=[f"{CLARIFICATION_USER_PROMPT}{numbered_transcript}"],
+        config=config,
+    )
+    result = json.loads(response.text)
+    return set(result.get("cr_line_indices", []))
+
+
+def propose_clarification_requests(numbered_transcript: str) -> set[int]:
+    """Ask Gemini which lines of a numbered transcript (one utterance per line, each
+    prefixed "[i] ...") are POTENTIAL clarification requests from the user, erring
+    toward over-inclusion since these proposals are meant for human review.
+    Returns the set of flagged line indices."""
+    return _cr_line_indices(CLARIFICATION_PROPOSAL_SYSTEM_INSTRUCTION, numbered_transcript)
+
+
+def judge_clarification_requests(numbered_transcript: str) -> set[int]:
+    """Ask Gemini for its FINAL, no-human-review judgment of which lines of a numbered
+    transcript are genuine clarification requests from the user. Returns the set of
+    flagged line indices."""
+    return _cr_line_indices(CLARIFICATION_FINAL_SYSTEM_INSTRUCTION, numbered_transcript)

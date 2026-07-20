@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
 """GUI for human rating of clarification requests (NCR).
 
-Calls Gemini to propose candidate clarification requests from each participant's
-transcripts, then presents a two-column view:
-  • Left  — full transcript with proposed CRs highlighted in yellow
-  • Right — Accept / Reject buttons for each highlighted turn
+Two modes, picked on the startup screen:
+  • With LLM proposals    — Gemini-proposed candidate lines (from getNCR_gemini.py's
+                             gemini_NCR_proposals.json) are highlighted, to help the
+                             rater spot them quickly.
+  • Without LLM proposals — no highlighting, a fully independent read of the transcript.
 
-Results are saved to experiment_data_NCR_by_<alias>.json.
+In both modes, every user (Speaker B) turn gets its own "Is clarification request"
+toggle, off by default, that the rater switches on for the turns they judge to be one.
+
+Results are saved to:
+  • gemini_and_<alias>_NCR.json (with LLM proposals)
+  • <alias>_NCR.json             (without LLM proposals)
 """
 
-import copy
 import json
-import os
 import re
 from pathlib import Path
 import tkinter as tk
@@ -20,150 +24,67 @@ from tkinter import ttk, messagebox
 # ──────────────────────────────────── constants ───────────────────────────────
 
 DATA_DIR = Path(__file__).parent / "data"
-MODEL_NAME = "gemini-2.5-flash"  
 
-ACCEPT = "accept"
-REJECT = "reject"
-UNSET = ""
-
-CR_SYSTEM_INSTRUCTION = (
-    "You are a linguistic expert identifying potential clarification requests in conversation "
-    "transcripts. Mark ANY utterance from the user (usually Speaker B) (the participant/tourist/customer) that could "
-    "possibly be a clarification request — err heavily on the side of inclusion.\n\n"
-    "A clarification request includes any utterance where a speaker:\n"
-    "- Asks to repeat or re-say something ('Can you repeat that?', 'Say that again?')\n"
-    "- Asks for clarification of something already mentioned\n"
-    "- Partially repeats something with a trailing or rising intonation\n"
-    "- Asks for spelling, pronunciation, or confirmation of a word or phrase\n"
-    "- Expresses that they didn't fully hear or understand something already said\n"
-    "- Makes any request to speak louder or more clearly\n\n"
-    "- Makes a sound indicating that they did not hear properly ('Huh?', 'Sorry?', 'What?')\n\n"
-    "Do NOT include general information-seeking questions about new topics.\n"
-    "Only mark utterances of the user (usually Speaker B) never the agent (Speaker A)."
-)
-
-CR_USER_PROMPT = (
-    "Identify clarification requests in the transcript below according to the system instruction. "
-    "Each line is prefixed with its index in brackets, e.g. [0], [1], etc. "
-    "Return ONLY a JSON object with a single key \"cr_line_indices\" whose value is an array "
-    "of the integer indices of lines that are clarification requests. "
-    "Example: {\"cr_line_indices\": [2, 7, 12]}\n\n"
-    "TRANSCRIPT:\n"
-)
-
-# ─────────────────────────────────── Gemini ──────────────────────────────────
+LINE_PATTERN = re.compile(r"\[(\d+:\d+)\]\s+(Speaker\s+([AB])):\s+(.*)")
 
 
-def _fetch_phase_proposals(client, phase_key: str, analysis_dir: Path) -> dict:
-    from google.genai import types
-    from google.genai.types import ThinkingConfig
-
-    tx_path = analysis_dir / f"transcript_{phase_key}.json"
-    if not tx_path.exists():
-        return {"lines": [], "cr_line_indices": []}
-
-    segments = json.loads(tx_path.read_text(encoding="utf-8"))
-    raw_lines = [f"[{s['timestamp']}] {s['speakerID']}: {s['text']}" for s in segments]
-    numbered_transcript = "\n".join(f"[{i}] {line}" for i, line in enumerate(raw_lines))
-    prompt = f"{CR_USER_PROMPT}{numbered_transcript}"
-
-    config = types.GenerateContentConfig(
-        system_instruction=CR_SYSTEM_INSTRUCTION,
-        temperature=0.0,
-        seed=42,
-        candidate_count=1,
-        thinking_config=ThinkingConfig(thinking_budget=0),
-        response_mime_type="application/json",
-    )
-    response = client.models.generate_content(
-        model=MODEL_NAME, contents=[prompt], config=config
-    )
-    result = json.loads(response.text)
-    cr_indices = set(result.get("cr_line_indices", []))
-    cr_lines = [
-        {"index": i, "text": raw_lines[i]}
-        for i in sorted(cr_indices)
-        if i < len(raw_lines)
-    ]
-    return {"cr_lines": cr_lines}
+# ─────────────────────────────── transcript parsing ───────────────────────────
 
 
-def fetch_and_save_proposals(folder: Path) -> None:
-    from google import genai
-
-    api_key = os.getenv("GEMINI_API_KEY")
-    client = genai.Client(api_key=api_key)
-
-    analysis_dir = folder / "analysis"
-    save_data = {}
-    for phase_key, _ in [("training", "Training"), ("experiment", "Experiment")]:
-        save_data[phase_key] = _fetch_phase_proposals(client, phase_key, analysis_dir)
-
-    save_path = analysis_dir / "gemini_NCR_proposals.json"
-    save_path.write_text(json.dumps(save_data, indent=2, ensure_ascii=False), encoding="utf-8")
+def _parse_line(raw: str) -> dict:
+    m = LINE_PATTERN.match(raw)
+    if m:
+        ts, label, letter, utterance = m.groups()
+        return {"timestamp": ts, "speaker": letter, "label": label, "text": utterance}
+    return {"timestamp": None, "speaker": None, "label": None, "text": raw}
 
 
-def parse_annotated_transcript(folder: Path, phase_key: str) -> list[dict]:
-    proposals_path = folder / "analysis" / "gemini_NCR_proposals.json"
-    all_data = json.loads(proposals_path.read_text(encoding="utf-8"))
-    phase_data = all_data.get(phase_key, {})
-    cr_indices = {item["index"] for item in phase_data.get("cr_lines", [])}
-
+def parse_transcript(folder: Path, phase_key: str, with_proposals: bool) -> list[dict]:
     tx_path = folder / "analysis" / f"transcript_{phase_key}.json"
     segments = json.loads(tx_path.read_text(encoding="utf-8"))
     raw_lines = [f"[{s['timestamp']}] {s['speakerID']}: {s['text']}" for s in segments]
 
-    result = []
+    proposed_indices = set()
+    if with_proposals:
+        proposals_path = folder / "analysis" / "gemini_NCR_proposals.json"
+        all_data = json.loads(proposals_path.read_text(encoding="utf-8"))
+        phase_data = all_data.get(phase_key, {})
+        proposed_indices = {item["index"] for item in phase_data.get("cr_lines", [])}
+
+    lines = []
     for i, raw in enumerate(raw_lines):
-        is_candidate = i in cr_indices
-        m = re.match(r"\[(\d+:\d+)\]\s+(Speaker\s+([AB])):\s+(.*)", raw)
-        if m:
-            ts, label, letter, utterance = m.groups()
-            result.append({"timestamp": ts, "speaker": letter, "label": label,
-                           "text": utterance, "raw": raw, "is_candidate": is_candidate,
-                           "proposal": raw if is_candidate else None, "var": None})
-        else:
-            result.append({"timestamp": None, "speaker": None, "label": None,
-                           "text": raw, "raw": raw, "is_candidate": is_candidate,
-                           "proposal": raw if is_candidate else None, "var": None})
-    return result
-
-
-def _assign_group_vars(lines: list[dict]) -> None:
-    """Assign a shared tk.StringVar to each run of consecutive candidates; mark group leaders."""
-    i = 0
-    while i < len(lines):
-        if lines[i].get("is_candidate"):
-            j = i + 1
-            while j < len(lines) and lines[j].get("is_candidate"):
-                j += 1
-            shared_var = tk.StringVar(value=UNSET)
-            for k in range(i, j):
-                lines[k]["var"] = shared_var
-                lines[k]["group_leader"] = (k == i)
-            i = j
-        else:
-            i += 1
+        line = _parse_line(raw)
+        line["raw"] = raw
+        line["is_proposed"] = i in proposed_indices
+        line["is_cr"] = tk.BooleanVar(value=False)
+        lines.append(line)
+    return lines
 
 
 # ─────────────────────────────── file helpers ─────────────────────────────────
 
 
-def output_filename(alias: str) -> str:
-    return f"experiment_data_NCR_by_{alias}.json"
+def ncr_only_filename(alias: str, with_proposals: bool) -> str:
+    """Filename for the NCR rating file (same {phase: {cr_lines: [...]}} shape as
+    gemini_NCR_proposals.json / gemini_NCR_decided.json), for direct comparison
+    against the LLM outputs. Merged into experiment_data by analysis_helpers.add_NCR_data."""
+    if with_proposals:
+        return f"gemini_and_{alias}_NCR.json"
+    return f"{alias}_NCR.json"
 
 
-def find_participants(alias: str) -> list[tuple[Path, dict]]:
-    """Return (folder, data) for participants without an NCR output file for this alias."""
-    out_name = output_filename(alias)
+def find_participants(alias: str, with_proposals: bool) -> list[Path]:
+    """Return folders ready to rate in this mode, that don't already have an NCR
+    output file for this alias+mode."""
+    out_name = ncr_only_filename(alias, with_proposals)
     result = []
     for folder in sorted(DATA_DIR.glob("experiment_*")):
         if not folder.is_dir() or (folder / "analysis" / out_name).exists():
             continue
-        fpath = folder / "experiment_data.json"
-        if fpath.exists():
-            with open(fpath, encoding="utf-8") as fh:
-                result.append((folder, json.load(fh)))
+        if with_proposals and not (folder / "analysis" / "gemini_NCR_proposals.json").exists():
+            continue
+        if (folder / "experiment_data.json").exists():
+            result.append(folder)
     return result
 
 
@@ -172,8 +93,8 @@ def _sanitize_alias(raw: str) -> str:
     return re.sub(r"[^\w\-]", "", slug)
 
 
-def _existing_ncr_files(alias: str) -> list[Path]:
-    name = output_filename(alias)
+def _existing_ncr_files(alias: str, with_proposals: bool) -> list[Path]:
+    name = ncr_only_filename(alias, with_proposals)
     return [f for f in DATA_DIR.glob(f"experiment_*/analysis/{name}") if f.is_file()]
 
 
@@ -183,10 +104,11 @@ def _existing_ncr_files(alias: str) -> list[Path]:
 class NCRApp:
     PHASES = [("training", "Training"), ("experiment", "Experiment")]
 
-    def __init__(self, root: tk.Tk, alias: str) -> None:
+    def __init__(self, root: tk.Tk, alias: str, with_proposals: bool) -> None:
         self.root = root
         self.alias = alias
-        self.participants = find_participants(alias)
+        self.with_proposals = with_proposals
+        self.participants = find_participants(alias, with_proposals)
         self.idx = 0
         self.all_lines: dict[str, list[dict]] = {}
 
@@ -201,7 +123,8 @@ class NCRApp:
     # ──────────────────────────────── layout ─────────────────────────────────
 
     def _build_chrome(self) -> None:
-        self.root.title(f"NCR Rater — {self.alias}")
+        mode_label = "with LLM proposals" if self.with_proposals else "without LLM proposals"
+        self.root.title(f"NCR Rater — {self.alias} ({mode_label})")
         self.root.geometry("1350x820")
         self.root.minsize(900, 600)
         self.root.resizable(True, True)
@@ -214,8 +137,6 @@ class NCRApp:
         tk.Label(top, text=f"Expert: {self.alias}", font=("Arial", 10), fg="#555").pack(
             side=tk.LEFT, padx=16
         )
-        self.loading_label = tk.Label(top, text="", font=("Arial", 10, "italic"), fg="#e07000")
-        self.loading_label.pack(side=tk.LEFT, padx=8)
         self.id_label = tk.Label(top, text="", font=("Arial", 10), fg="#888", anchor="e")
         self.id_label.pack(side=tk.RIGHT)
 
@@ -262,7 +183,7 @@ class NCRApp:
 
     def _load_participant(self, idx: int) -> None:
         self.idx = idx
-        folder, _ = self.participants[idx]
+        folder = self.participants[idx]
         total = len(self.participants)
 
         self.status_label.config(text=f"Participant {idx + 1} of {total}")
@@ -272,26 +193,10 @@ class NCRApp:
         for w in self.inner.winfo_children():
             w.destroy()
 
-        self.loading_label.config(text="⏳ Fetching Gemini analysis…")
-        self.root.update()
-
-        proposals_path = folder / "analysis" / "gemini_NCR_proposals.json"
-        if not proposals_path.exists():
-            try:
-                fetch_and_save_proposals(folder)
-            except Exception as exc:
-                messagebox.showerror("Gemini Error", f"Failed to get proposals:\n{exc}")
-
-        self.loading_label.config(text="")
-
-        self.all_lines = {}
-        for phase_key, _ in self.PHASES:
-            if proposals_path.exists():
-                lines = parse_annotated_transcript(folder, phase_key)
-                _assign_group_vars(lines)
-                self.all_lines[phase_key] = lines
-            else:
-                self.all_lines[phase_key] = []
+        self.all_lines = {
+            phase_key: parse_transcript(folder, phase_key, self.with_proposals)
+            for phase_key, _ in self.PHASES
+        }
 
         self._render()
         self.canvas.yview_moveto(0)
@@ -304,14 +209,13 @@ class NCRApp:
 
         for phase_key, phase_label in self.PHASES:
             lines = self.all_lines.get(phase_key, [])
-            n_cands = sum(1 for l in lines if l["is_candidate"])
+            header = f"  {phase_label}"
+            if self.with_proposals:
+                n_proposed = sum(1 for l in lines if l["is_proposed"])
+                header += f"  —  {n_proposed} proposed clarification request(s)"
 
             tk.Label(
-                f,
-                text=f"  {phase_label}  —  {n_cands} proposed clarification request(s)",
-                font=("Arial", 20, "bold"),
-                bg="#c8d4e8",
-                anchor="w",
+                f, text=header, font=("Arial", 20, "bold"), bg="#c8d4e8", anchor="w",
             ).grid(row=row, column=0, columnspan=3, sticky="ew", padx=2, pady=(12, 0))
             row += 1
 
@@ -322,7 +226,7 @@ class NCRApp:
             ).grid(row=row, column=0, sticky="ew", padx=1)
             tk.Frame(f, bg="#aaaaaa", width=2).grid(row=row, column=1, sticky="ns")
             tk.Label(
-                f, text="Decision", font=("Arial", 9, "bold"),
+                f, text="Clarification request?", font=("Arial", 9, "bold"),
                 bg="#e4e4e4", anchor="w", padx=6, pady=3,
             ).grid(row=row, column=2, sticky="ew", padx=1)
             row += 1
@@ -342,8 +246,6 @@ class NCRApp:
         f.grid_columnconfigure(2, weight=2)
 
     def _render_line(self, f: tk.Frame, row: int, line: dict) -> None:
-        is_cand = line.get("is_candidate", False)
-
         if line["speaker"] == "A":
             bg = "#d6eaff"
         elif line["speaker"] == "B":
@@ -365,61 +267,31 @@ class NCRApp:
             padx=8,
             pady=5,
         )
-        if is_cand:
+        if self.with_proposals and line["is_proposed"]:
             label_kwargs["fg"] = "#000000"
             label_kwargs["font"] = ("Arial", 14, "bold")
         tk.Label(f, **label_kwargs).grid(row=row, column=0, sticky="nsew", padx=1, pady=0)
 
         tk.Frame(f, bg="#aaaaaa", width=2).grid(row=row, column=1, sticky="ns")
 
-        if is_cand and line.get("group_leader", False):
-            var = line["var"]
+        if line["speaker"] == "B":
             cell = tk.Frame(f, bg=bg, padx=10, pady=4)
             cell.grid(row=row, column=2, sticky="nsew", padx=1, pady=0)
-            tk.Radiobutton(
+            tk.Checkbutton(
                 cell,
-                text="✓ Accept",
-                variable=var,
-                value=ACCEPT,
+                text="Is clarification request",
+                variable=line["is_cr"],
                 bg=bg,
                 activebackground=bg,
-                fg="#15c515",
-                font=("Arial", 12, "bold"),
                 selectcolor="#c8f0c8",
-            ).pack(side=tk.LEFT, padx=8)
-            tk.Radiobutton(
-                cell,
-                text="✗ Reject",
-                variable=var,
-                value=REJECT,
-                bg=bg,
-                activebackground=bg,
-                fg="#ff0000",
-                font=("Arial", 12, "bold"),
-                selectcolor="#f0c8c8",
+                font=("Arial", 11, "bold"),
             ).pack(side=tk.LEFT, padx=8)
         else:
             tk.Frame(f, bg=bg).grid(row=row, column=2, sticky="nsew", padx=1, pady=0)
 
     # ──────────────────────────────── actions ────────────────────────────────
 
-    def _undecided(self) -> list[dict]:
-        return [
-            line
-            for phase_lines in self.all_lines.values()
-            for line in phase_lines
-            if line.get("is_candidate") and line.get("group_leader") and line["var"].get() == UNSET
-        ]
-
     def _next(self) -> None:
-        pending = self._undecided()
-        if pending:
-            messagebox.showwarning(
-                "Incomplete",
-                f"{len(pending)} proposed clarification request(s) not yet decided.\n"
-                "Please accept or reject every highlighted turn before continuing.",
-            )
-            return
         self._save()
         if self.idx + 1 >= len(self.participants):
             messagebox.showinfo("Done", "All participants have been rated!")
@@ -428,40 +300,32 @@ class NCRApp:
             self._load_participant(self.idx + 1)
 
     def _save(self) -> None:
-        folder, data = self.participants[self.idx]
+        folder = self.participants[self.idx]
 
-        output = copy.deepcopy(data)
+        ncr_data = {}
         for phase_key, _ in self.PHASES:
             lines = self.all_lines.get(phase_key, [])
             accepted = [
-                l["text"]
-                for l in lines
-                if l.get("is_candidate") and l.get("group_leader") and l["var"].get() == ACCEPT
+                (i, l) for i, l in enumerate(lines) if l["speaker"] == "B" and l["is_cr"].get()
             ]
-            output[f"clarification_requests_{phase_key}"] = len(accepted)
-            output[f"clarification_examples_{phase_key}"] = accepted
+            ncr_data[phase_key] = {
+                "cr_lines": [{"index": i, "text": l["raw"]} for i, l in accepted]
+            }
 
-        out_path = folder / "analysis" / output_filename(self.alias)
-        with open(out_path, "w", encoding="utf-8") as fh:
-            json.dump(output, fh, indent=2, ensure_ascii=False)
+        ncr_path = folder / "analysis" / ncr_only_filename(self.alias, self.with_proposals)
+        with open(ncr_path, "w", encoding="utf-8") as fh:
+            json.dump(ncr_data, fh, indent=2, ensure_ascii=False)
 
     def _quit(self) -> None:
         choice = messagebox.askyesnocancel(
             "Quit",
             "Save what you have rated so far?\n"
-            "You can resume later with the same alias.",
+            "You can resume later with the same alias and mode.",
         )
         if choice is None:
             return
         if choice:
-            if not self._undecided():
-                self._save()
-            else:
-                messagebox.showinfo(
-                    "Note",
-                    "Current participant has undecided CRs and won't be saved.\n"
-                    "All previously rated participants are already saved.",
-                )
+            self._save()
         self.root.destroy()
 
 
@@ -522,7 +386,7 @@ def main() -> None:
     tk.Label(frame, text="NCR Rater", font=("Arial", 18, "bold")).pack(pady=(0, 6))
     tk.Label(
         frame,
-        text="Accept or reject Gemini-proposed clarification requests.",
+        text="Mark which turns are clarification requests.",
         font=("Arial", 10),
         fg="#555",
     ).pack(pady=(0, 24))
@@ -535,6 +399,17 @@ def main() -> None:
     entry.pack(pady=(4, 16))
     entry.focus_set()
 
+    tk.Label(frame, text="Mode:", font=("Arial", 10)).pack(anchor="w")
+    mode_var = tk.StringVar(value="with_proposals")
+    tk.Radiobutton(
+        frame, text="With LLM proposals (highlighted)", variable=mode_var,
+        value="with_proposals", font=("Arial", 10),
+    ).pack(anchor="w", padx=8)
+    tk.Radiobutton(
+        frame, text="Without LLM proposals (independent)", variable=mode_var,
+        value="without_proposals", font=("Arial", 10),
+    ).pack(anchor="w", padx=8, pady=(0, 16))
+
     def start() -> None:
         alias = _sanitize_alias(alias_var.get())
         if not alias:
@@ -542,7 +417,9 @@ def main() -> None:
                 "Invalid alias", "Alias must contain at least one letter or digit."
             )
             return
-        existing = _existing_ncr_files(alias)
+        with_proposals = mode_var.get() == "with_proposals"
+
+        existing = _existing_ncr_files(alias, with_proposals)
         if existing:
             choice = _ask_resume_or_scratch(root, alias)
             if choice is None:
@@ -553,7 +430,7 @@ def main() -> None:
 
         frame.destroy()
         root.resizable(True, True)
-        NCRApp(root, alias)
+        NCRApp(root, alias, with_proposals)
 
     tk.Button(frame, text="Start →", command=start, width=14, font=("Arial", 11, "bold")).pack()
     entry.bind("<Return>", lambda *_: start())
